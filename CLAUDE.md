@@ -75,6 +75,29 @@ Feature tags: bank_parse / auto_categorise / exception_explain / dispute_draft
 
 ---
 
+## Mobile Architecture — Non-Negotiable
+
+Every page built in this project has two versions:
+- `/` → Desktop page. Designed for mouse, wide screen, full reading context.
+- `/m` → Mobile page. Designed ground-up for thumb, narrow screen, quick context.
+
+Rules:
+- /m pages are NOT responsive versions of desktop pages. They are separate files 
+  with their own layout logic, information hierarchy, and interaction patterns.
+- Every PR that builds or modifies a page must include BOTH / and /m versions.
+- /m pages live at app/m/[page]/page.tsx
+- The landing page mobile version lives at app/m/page.tsx
+- Never use responsive Tailwind prefixes (sm:, md:, lg:) as a substitute for 
+  building a proper /m page. Responsive classes may be used within each version 
+  for minor adjustments only.
+- Navigation on /m is bottom-tab or sticky bottom CTA — never a top hamburger menu.
+- Font sizes on /m: hero headline 32px, section headline 24px, body 15px.
+- Glass panels on /m: full width, no side-by-side columns, generous vertical spacing.
+- CTA buttons on /m: full width, 56px height, always visible (sticky bottom where 
+  appropriate).
+
+---
+
 ## Phase Boundaries
 
 ### Phase 1 (current build)
