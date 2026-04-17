@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       await supabase.from('token_log').insert({
         session_id: crypto.randomUUID(),
         user_id: null,
-        model: null,
+        model: 'none',
         input_tokens: 0,
         output_tokens: 0,
         feature: 'waitlist_signup',
