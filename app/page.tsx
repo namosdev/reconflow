@@ -30,11 +30,19 @@ export default function Home() {
   const [companyName, setCompanyName] = useState('')
   const [formStatus, setFormStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
+  const [waitlistCount, setWaitlistCount] = useState<number | null>(null)
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20)
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/waitlist/count')
+      .then(r => r.json())
+      .then(d => { if (d.count > 0) setWaitlistCount(d.count) })
+      .catch(() => {})
   }, [])
 
   const scrollToWaitlist = () => {
@@ -486,11 +494,17 @@ export default function Home() {
             <h2 style={{ color: '#F0F4F8', fontSize: '32px', fontWeight: 600, textAlign: 'center', marginBottom: '16px' }}>
               Be the first team to stop doing this in Excel.
             </h2>
-            <p style={{ color: '#8BA7C7', fontSize: '16px', lineHeight: 1.6, textAlign: 'center', marginBottom: '40px' }}>
+            <p style={{ color: '#8BA7C7', fontSize: '16px', lineHeight: 1.6, textAlign: 'center', marginBottom: waitlistCount ? '16px' : '40px' }}>
               We&apos;re starting with 10 real estate developers in Pune
               and Mumbai. If your accounts team has a reconciliation problem, we want to
               talk to you before we talk to anyone else.
             </p>
+
+            {waitlistCount && (
+              <p style={{ color: '#6B9E9E', fontSize: '14px', textAlign: 'center', marginBottom: '40px', opacity: 0.85 }}>
+                {waitlistCount} teams already on the list
+              </p>
+            )}
 
             {formStatus === 'success' ? (
               <div style={{
