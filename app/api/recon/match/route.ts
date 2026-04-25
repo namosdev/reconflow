@@ -3,29 +3,6 @@ import { createClient } from '@supabase/supabase-js'
 
 type MatchStatus = 'AUTO_MATCHED' | 'MANUAL_MATCHED' | 'FLAGGED'
 
-async function applyMatch(
-  supabase: ReturnType<typeof createClient>,
-  txnId: string,
-  receiptId: string,
-  receiptNo: string,
-  status: MatchStatus
-) {
-  await supabase
-    .from('bank_transactions_hub')
-    .update({ recon_status: status, system_receipt_id: receiptNo })
-    .eq('txn_id', txnId)
-
-  await supabase
-    .from('receipts')
-    .update({
-      recon_status: status,
-      matched_txn_id: txnId,
-      matched_at: new Date().toISOString(),
-      matched_by: 'SYSTEM',
-    })
-    .eq('receipt_id', receiptId)
-}
-
 export async function POST(req: NextRequest) {
   let body: { bank_account_id?: string } | null = null
   try {
@@ -67,6 +44,23 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  async function applyMatch(txnId: string, receiptId: string, receiptNo: string, status: MatchStatus) {
+    await supabase
+      .from('bank_transactions_hub')
+      .update({ recon_status: status, system_receipt_id: receiptNo })
+      .eq('txn_id', txnId)
+
+    await supabase
+      .from('receipts')
+      .update({
+        recon_status: status,
+        matched_txn_id: txnId,
+        matched_at: new Date().toISOString(),
+        matched_by: 'SYSTEM',
+      })
+      .eq('receipt_id', receiptId)
+  }
+
   let auto_matched = 0
   let manual_matched = 0
   let flagged = 0
@@ -85,7 +79,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
 
         if (receipt) {
-          await applyMatch(supabase, txn.txn_id, receipt.receipt_id, receipt.receipt_no, 'AUTO_MATCHED')
+          await applyMatch(txn.txn_id, receipt.receipt_id, receipt.receipt_no, 'AUTO_MATCHED')
           auto_matched++
           continue
         }
@@ -109,7 +103,7 @@ export async function POST(req: NextRequest) {
         .maybeSingle()
 
       if (receiptP2) {
-        await applyMatch(supabase, txn.txn_id, receiptP2.receipt_id, receiptP2.receipt_no, 'MANUAL_MATCHED')
+        await applyMatch(txn.txn_id, receiptP2.receipt_id, receiptP2.receipt_no, 'MANUAL_MATCHED')
         manual_matched++
         continue
       }
@@ -124,7 +118,7 @@ export async function POST(req: NextRequest) {
         .maybeSingle()
 
       if (receiptP3) {
-        await applyMatch(supabase, txn.txn_id, receiptP3.receipt_id, receiptP3.receipt_no, 'FLAGGED')
+        await applyMatch(txn.txn_id, receiptP3.receipt_id, receiptP3.receipt_no, 'FLAGGED')
         flagged++
         continue
       }
