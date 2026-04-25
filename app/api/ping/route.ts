@@ -2,16 +2,17 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
 
-    await supabase.from("token_log").select("id").limit(1);
+  try {
+    await supabase.from("keepalive_log").insert({ notes: "cron_ping" });
   } catch {
-    return NextResponse.json({ status: "alive", note: "db check skipped" });
+    // Log failure must never break the ping response
+    console.error("keepalive_log insert failed");
   }
 
-  return NextResponse.json({ status: "alive", timestamp: new Date().toISOString() });
+  return NextResponse.json({ status: "alive" });
 }
