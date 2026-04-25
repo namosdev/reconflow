@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
@@ -25,6 +25,32 @@ type ParseResult = {
   transactions: ParsedTransaction[]
 }
 
+type ReconStats = {
+  total: number
+  auto_matched: number
+  needs_review: number
+  unmatched: number
+}
+
+type ReconTransaction = {
+  txn_id: string
+  txn_date: string
+  amount: number
+  utr_ref: string
+  raw_narration: string
+  recon_status: string
+}
+
+type ReconRunResult = {
+  total_transactions: number
+  auto_matched: number
+  manual_matched: number
+  flagged: number
+  unmatched: number
+  run_at: string
+  message?: string
+}
+
 function formatIndianAmount(amount: number): string {
   const abs = Math.abs(amount)
   return `₹ ${abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -39,6 +65,27 @@ function truncate(str: string, n: number): string {
   return str.length > n ? str.slice(0, n) + '…' : str
 }
 
+function statusBadgeStyle(status: string): React.CSSProperties {
+  const map: Record<string, { bg: string; border: string; color: string }> = {
+    AUTO_MATCHED:   { bg: 'rgba(110,231,183,0.12)', border: 'rgba(110,231,183,0.25)', color: '#6EE7B7' },
+    MANUAL_MATCHED: { bg: 'rgba(251,191,36,0.12)',  border: 'rgba(251,191,36,0.25)',  color: '#FBBF24' },
+    FLAGGED:        { bg: 'rgba(251,191,36,0.12)',  border: 'rgba(251,191,36,0.25)',  color: '#FBBF24' },
+    UNMATCHED:      { bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.25)', color: '#F87171' },
+  }
+  const c = map[status] ?? map.UNMATCHED
+  return {
+    padding: '3px 10px',
+    background: c.bg,
+    border: `1px solid ${c.border}`,
+    borderRadius: '20px',
+    color: c.color,
+    fontSize: '11px',
+    fontWeight: 600,
+    letterSpacing: '0.05em',
+    whiteSpace: 'nowrap',
+  }
+}
+
 export default function AdminDashboardPage() {
   const router = useRouter()
   const [session, setSession] = useState<Session | null>(null)
@@ -51,6 +98,13 @@ export default function AdminDashboardPage() {
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [statusMsg, setStatusMsg] = useState('')
   const [result, setResult] = useState<ParseResult | null>(null)
+
+  const [bankAccountId, setBankAccountId] = useState<string | null>(null)
+  const [reconStats, setReconStats] = useState<ReconStats | null>(null)
+  const [recentTxns, setRecentTxns] = useState<ReconTransaction[]>([])
+  const [reconRunning, setReconRunning] = useState(false)
+  const [reconRunResult, setReconRunResult] = useState<ReconRunResult | null>(null)
+  const [statsLoading, setStatsLoading] = useState(false)
 
   useEffect(() => {
     async function checkSession() {
@@ -67,6 +121,75 @@ export default function AdminDashboardPage() {
 
     checkSession()
   }, [router])
+
+  useEffect(() => {
+    if (!session) return
+
+    async function initRecon() {
+      const { data: account } = await supabase
+        .from('bank_accounts_master')
+        .select('account_id')
+        .limit(1)
+        .maybeSingle()
+
+      if (!account?.account_id) return
+
+      setBankAccountId(account.account_id)
+      await fetchReconData(account.account_id)
+    }
+
+    initRecon()
+  }, [session]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchReconData(accountId: string) {
+    setStatsLoading(true)
+
+    const { data: allTxns } = await supabase
+      .from('bank_transactions_hub')
+      .select('recon_status')
+      .eq('bank_account_id', accountId)
+
+    if (allTxns) {
+      const total = allTxns.length
+      const auto_matched = allTxns.filter(t => t.recon_status === 'AUTO_MATCHED').length
+      const needs_review = allTxns.filter(
+        t => t.recon_status === 'MANUAL_MATCHED' || t.recon_status === 'FLAGGED'
+      ).length
+      const unmatched = allTxns.filter(t => t.recon_status === 'UNMATCHED').length
+      setReconStats({ total, auto_matched, needs_review, unmatched })
+    }
+
+    const { data: recent } = await supabase
+      .from('bank_transactions_hub')
+      .select('txn_id, txn_date, amount, utr_ref, raw_narration, recon_status')
+      .eq('bank_account_id', accountId)
+      .order('txn_date', { ascending: false })
+      .limit(20)
+
+    if (recent) setRecentTxns(recent)
+    setStatsLoading(false)
+  }
+
+  async function handleRunReconciliation() {
+    if (!bankAccountId) return
+    setReconRunning(true)
+    setReconRunResult(null)
+
+    try {
+      const res = await fetch('/api/recon/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bank_account_id: bankAccountId }),
+      })
+      const data: ReconRunResult = await res.json()
+      setReconRunResult(data)
+      await fetchReconData(bankAccountId)
+    } catch {
+      // non-blocking — stats will refresh on next reload
+    } finally {
+      setReconRunning(false)
+    }
+  }
 
   async function handleSignOut() {
     await supabase.auth.signOut()
@@ -101,6 +224,7 @@ export default function AdminDashboardPage() {
           `✓ ${data.saved} transactions saved. ${data.skipped_duplicates} duplicates skipped. Tokens used: ${data.input_tokens} in / ${data.output_tokens} out`
         )
         setResult(data)
+        if (bankAccountId) await fetchReconData(bankAccountId)
       }
     } catch {
       setStatus('error')
@@ -160,7 +284,228 @@ export default function AdminDashboardPage() {
       {/* Main content */}
       <div style={{ maxWidth: '960px', margin: '0 auto', padding: '40px 24px' }}>
 
-        {/* SECTION A — Upload form */}
+        {/* SECTION A — Reconciliation status panel */}
+        {bankAccountId && (
+          <div
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              borderRadius: '16px',
+              padding: '32px',
+              marginBottom: '32px',
+            }}
+          >
+            <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 4px 0' }}>
+              Reconciliation Status
+            </h2>
+            <p style={{ fontSize: '13px', color: '#8BA7C7', margin: '0 0 24px 0' }}>
+              HDFC · Live account
+            </p>
+
+            {/* Row 1 — Stat cards */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: '12px',
+                marginBottom: '24px',
+              }}
+            >
+              {/* Total */}
+              <div
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                }}
+              >
+                <p style={{ fontSize: '11px', color: '#8BA7C7', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+                  Total
+                </p>
+                <p style={{ fontSize: '28px', fontWeight: 700, color: '#F0F4F8', margin: 0, lineHeight: 1 }}>
+                  {statsLoading ? '—' : (reconStats?.total ?? 0)}
+                </p>
+              </div>
+
+              {/* Auto Matched */}
+              <div
+                style={{
+                  background: 'rgba(110,231,183,0.04)',
+                  border: '1px solid rgba(110,231,183,0.18)',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                }}
+              >
+                <p style={{ fontSize: '11px', color: '#8BA7C7', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+                  Auto Matched
+                </p>
+                <p style={{ fontSize: '28px', fontWeight: 700, color: '#6EE7B7', margin: 0, lineHeight: 1 }}>
+                  {statsLoading ? '—' : (reconStats?.auto_matched ?? 0)}
+                </p>
+              </div>
+
+              {/* Needs Review */}
+              <div
+                style={{
+                  background: 'rgba(251,191,36,0.04)',
+                  border: '1px solid rgba(251,191,36,0.18)',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                }}
+              >
+                <p style={{ fontSize: '11px', color: '#8BA7C7', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+                  Needs Review
+                </p>
+                <p style={{ fontSize: '28px', fontWeight: 700, color: '#FBBF24', margin: 0, lineHeight: 1 }}>
+                  {statsLoading ? '—' : (reconStats?.needs_review ?? 0)}
+                </p>
+              </div>
+
+              {/* Unmatched */}
+              <div
+                style={{
+                  background: 'rgba(248,113,113,0.04)',
+                  border: '1px solid rgba(248,113,113,0.18)',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                }}
+              >
+                <p style={{ fontSize: '11px', color: '#8BA7C7', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+                  Unmatched
+                </p>
+                <p style={{ fontSize: '28px', fontWeight: 700, color: '#F87171', margin: 0, lineHeight: 1 }}>
+                  {statsLoading ? '—' : (reconStats?.unmatched ?? 0)}
+                </p>
+              </div>
+            </div>
+
+            {/* Row 2 — Run reconciliation */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '20px',
+                marginBottom: recentTxns.length > 0 ? '28px' : '0',
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                onClick={handleRunReconciliation}
+                disabled={reconRunning}
+                style={{
+                  padding: '12px 24px',
+                  background: reconRunning ? 'rgba(196,98,45,0.4)' : '#C4622D',
+                  border: 'none',
+                  borderRadius: '10px',
+                  color: '#FFFFFF',
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: reconRunning ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {reconRunning ? 'Matching transactions…' : 'Run Reconciliation'}
+              </button>
+
+              {reconRunResult && !reconRunning && (
+                <span style={{ fontSize: '14px', color: '#8BA7C7' }}>
+                  {reconRunResult.message
+                    ? reconRunResult.message
+                    : `Auto matched ${reconRunResult.auto_matched} · ${reconRunResult.manual_matched + reconRunResult.flagged} need review · ${reconRunResult.unmatched} unmatched`}
+                </span>
+              )}
+            </div>
+
+            {/* Row 3 — Transaction list */}
+            {recentTxns.length > 0 && (
+              <div>
+                <p
+                  style={{
+                    fontSize: '11px',
+                    color: '#8BA7C7',
+                    margin: '0 0 12px 0',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                    fontWeight: 600,
+                  }}
+                >
+                  Last 20 Transactions
+                </p>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                        {['Date', 'Amount', 'UTR', 'Narration', 'Status'].map(col => (
+                          <th
+                            key={col}
+                            style={{
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              color: '#8BA7C7',
+                              fontWeight: 600,
+                              fontSize: '11px',
+                              letterSpacing: '0.05em',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recentTxns.map((txn, i) => (
+                        <tr
+                          key={txn.txn_id}
+                          style={{
+                            background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
+                            borderBottom: '1px solid rgba(255,255,255,0.04)',
+                          }}
+                        >
+                          <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: '#D1E0EF' }}>
+                            {formatDate(txn.txn_date)}
+                          </td>
+                          <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                            <span style={{ color: txn.amount >= 0 ? '#6EE7B7' : '#F87171' }}>
+                              {txn.amount < 0 ? '−' : ''}{formatIndianAmount(txn.amount)}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                            {txn.utr_ref ? (
+                              <span style={{ color: '#D1E0EF', fontFamily: 'monospace', fontSize: '12px' }}>
+                                {txn.utr_ref}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#4A6583' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', color: '#D1E0EF', maxWidth: '260px' }}>
+                            {truncate(txn.raw_narration, 40)}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={statusBadgeStyle(txn.recon_status)}>
+                              {txn.recon_status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {!statsLoading && recentTxns.length === 0 && (
+              <p style={{ fontSize: '14px', color: '#8BA7C7', margin: '4px 0 0 0' }}>
+                No transactions yet. Upload a bank statement below to get started.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* SECTION B — Upload form */}
         <div
           style={{
             background: 'rgba(255,255,255,0.04)',
@@ -307,7 +652,7 @@ export default function AdminDashboardPage() {
           </form>
         </div>
 
-        {/* SECTION B — Results table */}
+        {/* SECTION C — Parse results table */}
         {result && result.transactions.length > 0 && (
           <div
             style={{
