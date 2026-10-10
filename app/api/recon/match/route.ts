@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     .select('txn_id, utr_ref, txn_date, amount')
     .eq('bank_account_id', bank_account_id)
     .eq('recon_status', 'UNMATCHED')
+    .is('duplicate_of', null)
 
   if (txnError) {
     return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 })

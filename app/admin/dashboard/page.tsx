@@ -19,7 +19,7 @@ type ParseResult = {
   success: boolean
   total_parsed: number
   saved: number
-  skipped_duplicates: number
+  duplicates: number
   input_tokens: number
   output_tokens: number
   transactions: ParsedTransaction[]
@@ -105,6 +105,7 @@ export default function AdminDashboardPage() {
   const [reconRunning, setReconRunning] = useState(false)
   const [reconRunResult, setReconRunResult] = useState<ReconRunResult | null>(null)
   const [statsLoading, setStatsLoading] = useState(false)
+  const [duplicateCount, setDuplicateCount] = useState(0)
 
   useEffect(() => {
     async function checkSession() {
@@ -148,6 +149,7 @@ export default function AdminDashboardPage() {
       .from('bank_transactions_hub')
       .select('recon_status')
       .eq('bank_account_id', accountId)
+      .is('duplicate_of', null)
 
     if (allTxns) {
       const total = allTxns.length
@@ -163,10 +165,18 @@ export default function AdminDashboardPage() {
       .from('bank_transactions_hub')
       .select('txn_id, txn_date, amount, utr_ref, raw_narration, recon_status')
       .eq('bank_account_id', accountId)
+      .is('duplicate_of', null)
       .order('txn_date', { ascending: false })
       .limit(20)
 
     if (recent) setRecentTxns(recent)
+
+    const { count: dupCount } = await supabase
+      .from('bank_transactions_hub')
+      .select('txn_id', { count: 'exact', head: true })
+      .eq('bank_account_id', accountId)
+      .not('duplicate_of', 'is', null)
+    setDuplicateCount(dupCount ?? 0)
     setStatsLoading(false)
   }
 
@@ -221,7 +231,7 @@ export default function AdminDashboardPage() {
       } else {
         setStatus('success')
         setStatusMsg(
-          `✓ ${data.saved} transactions saved. ${data.skipped_duplicates} duplicates skipped. Tokens used: ${data.input_tokens} in / ${data.output_tokens} out`
+          `✓ ${data.saved} transactions saved. ${data.duplicates} duplicates flagged. Tokens used: ${data.input_tokens} in / ${data.output_tokens} out`
         )
         setResult(data)
         if (bankAccountId) await fetchReconData(bankAccountId)
@@ -379,6 +389,12 @@ export default function AdminDashboardPage() {
                 </p>
               </div>
             </div>
+
+            {!statsLoading && duplicateCount > 0 && (
+              <p style={{ fontSize: '12px', color: '#8BA7C7', margin: '-12px 0 24px 0' }}>
+                {duplicateCount} duplicate rows ignored
+              </p>
+            )}
 
             {/* Row 2 — Run reconciliation */}
             <div

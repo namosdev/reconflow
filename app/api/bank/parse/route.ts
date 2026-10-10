@@ -62,7 +62,8 @@ For each transaction return exactly this JSON structure:
   amount: number (positive for credits, negative for debits),
   raw_narration: string (full narration as-is),
   utr_ref: string (extract UTR/reference number from narration or Chq/Ref field — if none found, return empty string ''),
-  closing_balance: number (closing balance for that row if available, else null)
+  closing_balance: number (closing balance for that row if available, else null),
+  line_no: number (1-based index of this transaction's row in the CSV, excluding headers)
 }
 Return a JSON array of all transactions. Skip header rows.
 Skip rows that have no amount (neither credit nor debit).
@@ -107,6 +108,7 @@ ${csvContent}`,
       raw_narration: string
       utr_ref: string
       closing_balance: number | null
+      line_no: number
     }
 
     let transactions: ParsedTransaction[]
@@ -123,29 +125,32 @@ ${csvContent}`,
 
     // STEP 6 — Save to bank_transactions_hub
     let saved_count = 0
-    let skipped_count = 0
+    let duplicate_count = 0
     const filename = file.name
 
     for (const txn of transactions) {
       try {
-        const { error } = await supabase.from('bank_transactions_hub').insert({
-          bank_account_id: accountId,
-          utr_ref: txn.utr_ref || '',
-          txn_date: txn.txn_date,
-          amount: txn.amount,
-          raw_narration: txn.raw_narration,
-          source_type: 'MANUAL_UPLOAD',
-          source_ref_doc: filename,
-          recon_status: 'UNMATCHED',
-          running_balance: txn.closing_balance ?? null,
-        })
+        const { data, error } = await supabase
+          .from('bank_transactions_hub')
+          .insert({
+            bank_account_id: accountId,
+            utr_ref: txn.utr_ref?.trim() || null,
+            txn_date: txn.txn_date,
+            amount: txn.amount,
+            raw_narration: txn.raw_narration,
+            source_type: 'MANUAL_UPLOAD',
+            source_ref_doc: filename,
+            recon_status: 'UNMATCHED',
+            running_balance: txn.closing_balance ?? null,
+            line_no: txn.line_no ?? null,
+          })
+          .select('txn_id, duplicate_of')
+          .single()
 
         if (error) {
-          if (error.code === '23505') {
-            skipped_count++
-          } else {
-            console.error('Insert error:', error)
-          }
+          console.error('Insert error:', error)
+        } else if (data?.duplicate_of) {
+          duplicate_count++
         } else {
           saved_count++
         }
@@ -159,7 +164,7 @@ ${csvContent}`,
       success: true,
       total_parsed: transactions.length,
       saved: saved_count,
-      skipped_duplicates: skipped_count,
+      duplicates: duplicate_count,
       input_tokens: anthropicData.usage?.input_tokens ?? 0,
       output_tokens: anthropicData.usage?.output_tokens ?? 0,
       transactions,
